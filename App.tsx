@@ -13,7 +13,7 @@ import { generateWritingTask, evaluateWriting } from './services/geminiService';
 import { DictionaryPopup } from './components/DictionaryPopup';
 import { AnimatePresence, motion } from 'motion/react';
 import { auth, db, googleProvider, OperationType, handleFirestoreError } from './firebase';
-import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
+import { signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, setDoc, getDoc, getDocs, query, where, orderBy, onSnapshot, addDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 
 const App: React.FC = () => {
@@ -62,6 +62,19 @@ const App: React.FC = () => {
 
   // Load Data & Sync with Firebase
   useEffect(() => {
+    getRedirectResult(auth).then(async (result) => {
+  if (result?.user) {
+    const user = result.user;
+    await setDoc(doc(db, 'users', user.uid), {
+      uid: user.uid,
+      email: user.email,
+      displayName: user.displayName,
+      photoURL: user.photoURL,
+      createdAt: Date.now()
+    }, { merge: true });
+  }
+});
+    
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
       if (user) {
         setState(prev => ({
@@ -117,27 +130,14 @@ const App: React.FC = () => {
     };
   }, [state.user]);
 
-  const handleSignIn = async () => {
+const handleSignIn = async () => {
     try {
       setState(prev => ({ ...prev, isLoading: true }));
-      const result = await signInWithPopup(auth, googleProvider);
-      const user = result.user;
-      
-      // Upsert user profile
-      await setDoc(doc(db, 'users', user.uid), {
-        uid: user.uid,
-        email: user.email,
-        displayName: user.displayName,
-        photoURL: user.photoURL,
-        createdAt: Date.now()
-      }, { merge: true });
-
-      setState(prev => ({ ...prev, isLoading: false }));
+      await signInWithRedirect(auth, googleProvider);
     } catch (err) {
       setState(prev => ({ ...prev, isLoading: false, error: "Sign in failed." }));
     }
   };
-
   const handleSignOut = async () => {
     try {
       await signOut(auth);
