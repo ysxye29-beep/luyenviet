@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { Layout } from './components/Layout';
 import { Home } from './views/Home';
@@ -13,7 +12,7 @@ import { generateWritingTask, evaluateWriting } from './services/geminiService';
 import { DictionaryPopup } from './components/DictionaryPopup';
 import { AnimatePresence, motion } from 'motion/react';
 import { auth, db, googleProvider, OperationType, handleFirestoreError } from './firebase';
-import { signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged } from 'firebase/auth';
+import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, setDoc, getDoc, getDocs, query, where, orderBy, onSnapshot, addDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 
 const App: React.FC = () => {
@@ -32,16 +31,10 @@ const App: React.FC = () => {
 
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [savedItems, setSavedItems] = useState<SavedItem[]>([]);
-  
-  // Dictionary State
   const [lookupWord, setLookupWord] = useState<string | null>(null);
-
-  // New: Track corrections applied in Workspace
   const [sessionCorrections, setSessionCorrections] = useState<AppliedCorrection[]>([]);
-  // New: Track session time
   const [sessionTime, setSessionTime] = useState<number>(0);
 
-  // Theme Logic
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('theme') === 'dark' ||
@@ -60,30 +53,7 @@ const App: React.FC = () => {
     }
   }, [darkMode]);
 
-  // Load Data & Sync with Firebase
   useEffect(() => {
-  getRedirectResult(auth).then(async (result) => {
-  if (result?.user) {
-    const user = result.user;
-    await setDoc(doc(db, 'users', user.uid), {
-      uid: user.uid,
-      email: user.email,
-      displayName: user.displayName,
-      photoURL: user.photoURL,
-      createdAt: Date.now()
-    }, { merge: true });
-    setState(prev => ({
-      ...prev,
-      user: {
-        uid: user.uid,
-        email: user.email,
-        displayName: user.displayName,
-        photoURL: user.photoURL
-      },
-      authReady: true
-    }));
-  }
-});
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
       if (user) {
         setState(prev => ({
@@ -97,37 +67,32 @@ const App: React.FC = () => {
           authReady: true
         }));
       } else {
-        setState(prev => ({ ...prev, user: null, authReady: true, history: [], savedItems: [] }));
+        setState(prev => ({ ...prev, user: null, authReady: true }));
         setHistory([]);
         setSavedItems([]);
       }
     });
-
     return () => unsubscribeAuth();
   }, []);
 
   useEffect(() => {
     if (!state.user) return;
 
-    // Sync History
     const qHistory = query(
       collection(db, 'writingHistory'),
       where('userId', '==', state.user.uid),
       orderBy('timestamp', 'desc')
     );
-
     const unsubscribeHistory = onSnapshot(qHistory, (snapshot) => {
       const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as HistoryItem));
       setHistory(items);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'writingHistory'));
 
-    // Sync Notebook
     const qNotebook = query(
       collection(db, 'notebookItems'),
       where('userId', '==', state.user.uid),
       orderBy('date', 'desc')
     );
-
     const unsubscribeNotebook = onSnapshot(qNotebook, (snapshot) => {
       const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as SavedItem));
       setSavedItems(items);
@@ -139,14 +104,24 @@ const App: React.FC = () => {
     };
   }, [state.user]);
 
-const handleSignIn = async () => {
+  const handleSignIn = async () => {
     try {
       setState(prev => ({ ...prev, isLoading: true }));
-      await signInWithRedirect(auth, googleProvider);
+      const result = await signInWithPopup(auth, googleProvider);
+      const user = result.user;
+      await setDoc(doc(db, 'users', user.uid), {
+        uid: user.uid,
+        email: user.email,
+        displayName: user.displayName,
+        photoURL: user.photoURL,
+        createdAt: Date.now()
+      }, { merge: true });
+      setState(prev => ({ ...prev, isLoading: false }));
     } catch (err) {
       setState(prev => ({ ...prev, isLoading: false, error: "Sign in failed." }));
     }
   };
+
   const handleSignOut = async () => {
     try {
       await signOut(auth);
@@ -159,10 +134,7 @@ const handleSignIn = async () => {
   const saveToHistory = async (item: Omit<HistoryItem, 'id'>) => {
     if (!state.user) return;
     try {
-      await addDoc(collection(db, 'writingHistory'), {
-        ...item,
-        userId: state.user.uid
-      });
+      await addDoc(collection(db, 'writingHistory'), { ...item, userId: state.user.uid });
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'writingHistory');
     }
@@ -189,7 +161,6 @@ const handleSignIn = async () => {
       alert("This item is already in your notebook!");
       return;
     }
-
     try {
       await addDoc(collection(db, 'notebookItems'), {
         ...itemData,
@@ -209,7 +180,7 @@ const handleSignIn = async () => {
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, 'notebookItems');
     }
-  }
+  };
 
   const handleRemoveSavedItem = async (id: string) => {
     if (window.confirm("Remove this item?")) {
@@ -234,29 +205,21 @@ const handleSignIn = async () => {
 
   const handleSelectTask = async (type: TaskType) => {
     setState(prev => ({ ...prev, isLoading: true, error: null, selectedTaskType: type }));
-    setSessionCorrections([]); // Reset session corrections
+    setSessionCorrections([]);
     setSessionTime(0);
     try {
       const promptText = await generateWritingTask(type);
       setState(prev => ({
         ...prev,
         currentView: 'workspace',
-        currentTask: {
-          id: Date.now().toString(),
-          type,
-          promptText
-        },
+        currentTask: { id: Date.now().toString(), type, promptText },
         userText: '',
-        currentOutline: [], // Reset outline
+        currentOutline: [],
         feedback: null,
         isLoading: false
       }));
     } catch (err) {
-      setState(prev => ({ 
-        ...prev, 
-        isLoading: false, 
-        error: "Could not generate task. Please check your connection." 
-      }));
+      setState(prev => ({ ...prev, isLoading: false, error: "Could not generate task. Please check your connection." }));
     }
   };
 
@@ -264,34 +227,25 @@ const handleSignIn = async () => {
     setSessionCorrections([]);
     setSessionTime(0);
     setState(prev => ({
-        ...prev,
-        currentView: 'workspace',
-        currentTask: {
-          id: task.id,
-          type: task.type,
-          promptText: task.content,
-          sampleAnswer: task.sampleAnswer // Pass the sample answer
-        },
-        userText: '',
-        currentOutline: [],
-        feedback: null,
-        isLoading: false
+      ...prev,
+      currentView: 'workspace',
+      currentTask: { id: task.id, type: task.type, promptText: task.content, sampleAnswer: task.sampleAnswer },
+      userText: '',
+      currentOutline: [],
+      feedback: null,
+      isLoading: false
     }));
   };
 
   const handleStartCustomTask = (type: TaskType, promptText: string) => {
-    setSessionCorrections([]); // Reset session corrections
+    setSessionCorrections([]);
     setSessionTime(0);
     setState(prev => ({
       ...prev,
       currentView: 'workspace',
-      currentTask: {
-        id: Date.now().toString(),
-        type,
-        promptText
-      },
+      currentTask: { id: Date.now().toString(), type, promptText },
       userText: '',
-      currentOutline: [], // Reset outline
+      currentOutline: [],
       feedback: null,
       isLoading: false
     }));
@@ -299,73 +253,50 @@ const handleSignIn = async () => {
 
   const handleSubmit = async (timeSpentSeconds: number) => {
     if (!state.currentTask || !state.userText) return;
-
     setSessionTime(timeSpentSeconds);
     setState(prev => ({ ...prev, isLoading: true, error: null }));
     try {
-      const result = await evaluateWriting(
-        state.currentTask.type,
-        state.currentTask.promptText,
-        state.userText
-      );
-
-      // Save to history including session corrections and outline
+      const result = await evaluateWriting(state.currentTask.type, state.currentTask.promptText, state.userText);
       const historyItem: Omit<HistoryItem, 'id'> = {
         timestamp: Date.now(),
         taskType: state.currentTask.type,
         promptText: state.currentTask.promptText,
         userText: state.userText,
         feedback: result,
-        sessionCorrections: sessionCorrections, 
-        outline: state.currentOutline, 
-        timeSpentSeconds: timeSpentSeconds 
+        sessionCorrections,
+        outline: state.currentOutline,
+        timeSpentSeconds
       };
       await saveToHistory(historyItem);
-
-      setState(prev => ({
-        ...prev,
-        currentView: 'result',
-        feedback: result,
-        isLoading: false
-      }));
+      setState(prev => ({ ...prev, currentView: 'result', feedback: result, isLoading: false }));
     } catch (err) {
-      setState(prev => ({ 
-        ...prev, 
-        isLoading: false, 
-        error: "Failed to evaluate text. Please try again." 
-      }));
+      setState(prev => ({ ...prev, isLoading: false, error: "Failed to evaluate text. Please try again." }));
     }
   };
 
   const handleViewHistoryItem = (item: HistoryItem) => {
-    setSessionCorrections(item.sessionCorrections || []); // Restore tracked corrections
-    setSessionTime(item.timeSpentSeconds || 0); // Restore time
+    setSessionCorrections(item.sessionCorrections || []);
+    setSessionTime(item.timeSpentSeconds || 0);
     setState(prev => ({
       ...prev,
       currentView: 'result',
-      currentTask: {
-        id: item.id,
-        type: item.taskType,
-        promptText: item.promptText
-      },
+      currentTask: { id: item.id, type: item.taskType, promptText: item.promptText },
       userText: item.userText,
-      currentOutline: item.outline || [], // Restore outline
+      currentOutline: item.outline || [],
       feedback: item.feedback,
       isLoading: false,
       selectedTaskType: item.taskType
     }));
   };
 
-  const handleRetry = () => {
-    setState(prev => ({ ...prev, currentView: 'workspace' }));
-  };
+  const handleRetry = () => setState(prev => ({ ...prev, currentView: 'workspace' }));
 
   const handleHome = () => {
-    setState(prev => ({ 
-      ...prev, 
-      currentView: 'home', 
-      userText: '', 
-      currentTask: null, 
+    setState(prev => ({
+      ...prev,
+      currentView: 'home',
+      userText: '',
+      currentTask: null,
       currentOutline: [],
       feedback: null,
       selectedTaskType: null
@@ -375,11 +306,8 @@ const handleSignIn = async () => {
   };
 
   const handleWordLookup = (word: string) => {
-    // Clean word: remove punctuation and whitespace
-    const cleanWord = word.replace(/[.,/#!$%^&*;:{}=\-_`~()]/g,"").trim();
-    if (cleanWord) {
-      setLookupWord(cleanWord);
-    }
+    const cleanWord = word.replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "").trim();
+    if (cleanWord) setLookupWord(cleanWord);
   };
 
   if (!state.authReady) {
@@ -394,8 +322,8 @@ const handleSignIn = async () => {
     <Layout isDarkMode={darkMode} onToggleTheme={toggleTheme} user={state.user} onSignOut={handleSignOut} onSignIn={handleSignIn}>
       <AnimatePresence>
         {lookupWord && (
-          <DictionaryPopup 
-            word={lookupWord} 
+          <DictionaryPopup
+            word={lookupWord}
             onClose={() => setLookupWord(null)}
             onSave={handleSaveItem}
             isSaved={savedItems.some(i => i.content.toLowerCase() === lookupWord.toLowerCase())}
@@ -422,8 +350,8 @@ const handleSignIn = async () => {
       )}
 
       {state.currentView === 'home' && (
-        <Home 
-          onSelectTask={handleSelectTask} 
+        <Home
+          onSelectTask={handleSelectTask}
           onStartCustomTask={handleStartCustomTask}
           onOpenTopicBank={() => setState(prev => ({ ...prev, currentView: 'topic-bank' }))}
           onOpenNotebook={() => setState(prev => ({ ...prev, currentView: 'notebook' }))}
@@ -436,37 +364,24 @@ const handleSignIn = async () => {
         />
       )}
 
-      {state.currentView === 'topic-bank' && (
-        <TopicBank onBack={handleHome} />
-      )}
+      {state.currentView === 'topic-bank' && <TopicBank onBack={handleHome} />}
 
       {state.currentView === 'notebook' && (
-        <Notebook 
-          items={savedItems}
-          onRemoveItem={handleRemoveSavedItem}
-          onBack={handleHome}
-        />
+        <Notebook items={savedItems} onRemoveItem={handleRemoveSavedItem} onBack={handleHome} />
       )}
-      
+
       {state.currentView === 'exam-library' && (
-        <ExamLibrary 
-          onSelectTask={handleStartPdfTask}
-          onBack={handleHome}
-        />
+        <ExamLibrary onSelectTask={handleStartPdfTask} onBack={handleHome} />
       )}
 
       {state.currentView === 'smart-review' && (
-        <SmartReview 
-          items={savedItems}
-          onUpdateItem={handleUpdateSavedItem}
-          onBack={handleHome}
-        />
+        <SmartReview items={savedItems} onUpdateItem={handleUpdateSavedItem} onBack={handleHome} />
       )}
 
       {state.currentView === 'workspace' && (
-        <Workspace 
-          task={state.currentTask} 
-          text={state.userText} 
+        <Workspace
+          task={state.currentTask}
+          text={state.userText}
           outline={state.currentOutline}
           onTextChange={(text) => setState(prev => ({ ...prev, userText: text }))}
           onOutlineChange={(outline) => setState(prev => ({ ...prev, currentOutline: outline }))}
@@ -480,8 +395,8 @@ const handleSignIn = async () => {
       )}
 
       {state.currentView === 'result' && state.feedback && state.currentTask && (
-        <Result 
-          feedback={state.feedback} 
+        <Result
+          feedback={state.feedback}
           taskType={state.currentTask.type}
           userText={state.userText}
           promptText={state.currentTask.promptText}
@@ -490,8 +405,8 @@ const handleSignIn = async () => {
           onNewTask={handleHome}
           onSaveItem={handleSaveItem}
           sessionCorrections={sessionCorrections}
-          timeSpentSeconds={sessionTime} 
-          officialAnswer={state.currentTask.sampleAnswer} // Pass official model answer
+          timeSpentSeconds={sessionTime}
+          officialAnswer={state.currentTask.sampleAnswer}
           onLookup={handleWordLookup}
         />
       )}
