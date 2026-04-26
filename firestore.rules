@@ -1,0 +1,83 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isDataOwner() {
+      return isSignedIn() && request.resource.data.userId == request.auth.uid;
+    }
+    
+    function isExistingOwner() {
+      return isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Entity Validations
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt']) &&
+             data.keys().size() <= 6 &&
+             data.uid == request.auth.uid &&
+             data.email is string &&
+             data.createdAt is int;
+    }
+
+    function isValidHistoryItem(data) {
+      return data.keys().hasAll(['userId', 'type', 'prompt', 'userText', 'feedback', 'date']) &&
+             data.userId == request.auth.uid &&
+             data.type in ['informal-letter', 'essay', 'translation'] &&
+             data.prompt is string && data.prompt.size() < 5000 &&
+             data.userText is string && data.userText.size() < 10000 &&
+             data.date is int;
+    }
+
+    function isValidSavedItem(data) {
+      return data.keys().hasAll(['userId', 'type', 'content', 'source', 'date']) &&
+             data.userId == request.auth.uid &&
+             data.type in ['word', 'sentence'] &&
+             data.content is string && data.content.size() < 1000 &&
+             data.source is string &&
+             data.date is int;
+    }
+
+    // Match Blocks
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) &&
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'photoURL']);
+    }
+
+    match /writingHistory/{historyId} {
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isDataOwner() && isValidHistoryItem(request.resource.data);
+      allow delete: if isSignedIn() && isExistingOwner();
+    }
+
+    match /notebookItems/{itemId} {
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isDataOwner() && isValidSavedItem(request.resource.data);
+      allow update: if isSignedIn() && isExistingOwner() && isDataOwner() && 
+                      isValidSavedItem(request.resource.data) &&
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['meaning', 'phonetic', 'example']);
+      allow delete: if isSignedIn() && isExistingOwner();
+    }
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Basic user information and settings",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "integer" }
+      },
+      "required": ["uid", "email", "createdAt"]
+    },
+    "HistoryItem": {
+      "title": "Writing History Item",
+      "description": "A record of a completed writing task and its feedback",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "type": { "type": "string", "enum": ["informal-letter", "essay", "translation"] },
+        "prompt": { "type": "string" },
+        "userText": { "type": "string" },
+        "feedback": { "type": "object" },
+        "date": { "type": "integer" },
+        "timeSpent": { "type": "number" }
+      },
+      "required": ["userId", "type", "prompt", "userText", "feedback", "date"]
+    },
+    "SavedItem": {
+      "title": "Saved Word or Sentence",
+      "description": "An item saved to the user's notebook for translation and SRS",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "type": { "type": "string", "enum": ["word", "sentence"] },
+        "content": { "type": "string" },
+        "source": { "type": "string" },
+        "date": { "type": "integer" },
+        "meaning": { "type": "string" },
+        "phonetic": { "type": "string" },
+        "example": { "type": "string" }
+      },
+      "required": ["userId", "type", "content", "source", "date"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/writingHistory/{historyId}": {
+      "schema": "HistoryItem",
+      "description": "Log of writing exercises"
+    },
+    "/notebookItems/{itemId}": {
+      "schema": "SavedItem",
+      "description": "Vocabulary and sentences in notebook"
+    }
+  }
+}
