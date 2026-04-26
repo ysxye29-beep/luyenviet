@@ -117,8 +117,14 @@ const App: React.FC = () => {
         createdAt: Date.now()
       }, { merge: true });
       setState(prev => ({ ...prev, isLoading: false }));
-    } catch (err) {
-      setState(prev => ({ ...prev, isLoading: false, error: "Sign in failed." }));
+    } catch (err: any) {
+      // Ignore COOP errors - login may still succeed
+      if (err?.code !== 'auth/cancelled-popup-request' && 
+          err?.code !== 'auth/popup-closed-by-user') {
+        setState(prev => ({ ...prev, isLoading: false, error: "Sign in failed." }));
+      } else {
+        setState(prev => ({ ...prev, isLoading: false }));
+      }
     }
   };
 
