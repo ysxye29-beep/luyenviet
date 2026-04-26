@@ -62,7 +62,7 @@ const App: React.FC = () => {
 
   // Load Data & Sync with Firebase
   useEffect(() => {
-    getRedirectResult(auth).then(async (result) => {
+  getRedirectResult(auth).then(async (result) => {
   if (result?.user) {
     const user = result.user;
     await setDoc(doc(db, 'users', user.uid), {
@@ -72,9 +72,18 @@ const App: React.FC = () => {
       photoURL: user.photoURL,
       createdAt: Date.now()
     }, { merge: true });
+    setState(prev => ({
+      ...prev,
+      user: {
+        uid: user.uid,
+        email: user.email,
+        displayName: user.displayName,
+        photoURL: user.photoURL
+      },
+      authReady: true
+    }));
   }
 });
-    
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
       if (user) {
         setState(prev => ({
